@@ -41,6 +41,10 @@
 			width: min(100%, 31rem);
 		}
 
+		.search-shell {
+			position: relative;
+		}
+
 		.search-form .form-control {
 			border: 0;
 			box-shadow: none;
@@ -54,6 +58,46 @@
 			border-radius: 999px;
 			overflow: hidden;
 			box-shadow: 0 0.75rem 1.5rem rgba(15, 23, 42, 0.18);
+		}
+
+		.search-suggestions {
+			position: absolute;
+			top: calc(100% + 0.5rem);
+			left: 0;
+			right: 0;
+			z-index: 1050;
+			display: none;
+			padding: 0.35rem;
+			border: 0;
+			border-radius: 1rem;
+			background: rgba(15, 23, 42, 0.96);
+			box-shadow: 0 1rem 2rem rgba(15, 23, 42, 0.24);
+			backdrop-filter: blur(12px);
+		}
+
+		.search-suggestions .dropdown-item {
+			border-radius: 0.75rem;
+			white-space: normal;
+		}
+
+		.search-suggestions .dropdown-item.active,
+		.search-suggestions .dropdown-item:active {
+			background: rgba(248, 250, 252, 0.16);
+			color: #f8fafc;
+		}
+
+		.search-suggestions .suggestion-title {
+			display: block;
+			font-weight: 600;
+			line-height: 1.25;
+		}
+
+		.search-suggestions .suggestion-subtitle {
+			display: block;
+			font-size: 0.8rem;
+			color: rgba(248, 250, 252, 0.72);
+			line-height: 1.25;
+			margin-top: 0.15rem;
 		}
 
 		#map {
@@ -151,21 +195,27 @@
 	<nav class="navbar navbar-expand-md app-navbar fixed-top">
 		<div class="container-fluid gap-3 align-items-md-center">
 			<div class="navbar-brand app-brand fw-semibold text-white mb-0">Maps</div>
-			<form id="search-form" class="search-form ms-md-auto">
-				<div class="input-group input-group-lg">
-					<input
-						id="search-input"
-						class="form-control"
-						type="search"
-						placeholder="Search places"
-						aria-label="Search places"
-						autocomplete="off"
-					>
-					<button id="search-button" class="btn btn-light fw-semibold" type="submit">
-						Search
-					</button>
-				</div>
-			</form>
+			<div class="search-shell search-form ms-md-auto">
+				<form id="search-form">
+					<div class="input-group input-group-lg">
+						<input
+							id="search-input"
+							class="form-control"
+							type="search"
+							placeholder="Search places"
+							aria-label="Search places"
+							autocomplete="off"
+							aria-autocomplete="list"
+							aria-expanded="false"
+							aria-controls="search-suggestions"
+						>
+						<button id="search-button" class="btn btn-light fw-semibold" type="submit">
+							Search
+						</button>
+					</div>
+				</form>
+				<div id="search-suggestions" class="search-suggestions dropdown-menu dropdown-menu-dark"></div>
+			</div>
 		</div>
 	</nav>
 
