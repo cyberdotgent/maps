@@ -253,11 +253,17 @@
 			const searchButton = $('#search-button');
 			const searchInput = $('#search-input');
 			const form = $('#search-form');
+			const suggestions = $('#search-suggestions');
 
 			let marker = null;
 			let activeSearchRequest = null;
 			let activeReverseRequest = null;
+			let activeSuggestionRequest = null;
 			let searchToken = 0;
+			let suggestionToken = 0;
+			let suggestionTimer = null;
+			let suggestionItems = [];
+			let highlightedSuggestionIndex = -1;
 
 			function escapeHtml(value) {
 				return String(value ?? '').replace(/[&<>"']/g, function (character) {
@@ -282,6 +288,161 @@
 
 			function hideStatus() {
 				statusChip.stop(true, true).fadeOut(120);
+			}
+
+			function cancelSuggestionRequests() {
+				suggestionToken += 1;
+
+				if (suggestionTimer) {
+					window.clearTimeout(suggestionTimer);
+					suggestionTimer = null;
+				}
+
+				if (activeSuggestionRequest && activeSuggestionRequest.abort) {
+					activeSuggestionRequest.abort();
+				}
+
+				activeSuggestionRequest = null;
+			}
+
+			function hideSuggestions() {
+				suggestions.hide().empty();
+				searchInput.attr('aria-expanded', 'false');
+				suggestionItems = [];
+				highlightedSuggestionIndex = -1;
+			}
+
+			function highlightSuggestion(index) {
+				const items = suggestions.find('[data-suggestion-index]');
+
+				if (!items.length) {
+					highlightedSuggestionIndex = -1;
+					return;
+				}
+
+				highlightedSuggestionIndex = Math.max(0, Math.min(index, items.length - 1));
+				items.removeClass('active').attr('aria-selected', 'false');
+				const active = items.eq(highlightedSuggestionIndex);
+				active.addClass('active').attr('aria-selected', 'true');
+				active[0].scrollIntoView({ block: 'nearest' });
+			}
+
+			function openSuggestionList(results, query) {
+				if (!Array.isArray(results) || results.length === 0) {
+					hideSuggestions();
+					return;
+				}
+
+				suggestionItems = results.slice(0, 6);
+				highlightedSuggestionIndex = 0;
+
+				const menu = suggestionItems.map(function (item, index) {
+					const title = escapeHtml(item.display_name || item.name || query);
+					const subtitle = escapeHtml([item.class, item.type].filter(Boolean).join(' / '));
+
+					return `
+						<button
+							type="button"
+							class="dropdown-item"
+							role="option"
+							aria-selected="${index === 0 ? 'true' : 'false'}"
+							data-suggestion-index="${index}"
+						>
+							<span class="suggestion-title">${title}</span>
+							${subtitle ? `<span class="suggestion-subtitle">${subtitle}</span>` : ''}
+						</button>
+					`;
+				}).join('');
+
+				suggestions.html(menu).show();
+				searchInput.attr('aria-expanded', 'true');
+			}
+
+			function chooseSuggestion(index) {
+				const selected = suggestionItems[index];
+
+				if (!selected) {
+					return;
+				}
+
+				cancelSuggestionRequests();
+				searchInput.val(selected.display_name || searchInput.val());
+				hideSuggestions();
+				setButtonBusy(true);
+				showStatus('Resolving selected place...', 'warning');
+				placeResult(selected, searchInput.val());
+			}
+
+			function placeResult(result, fallbackQuery, reverseResult) {
+				const lat = Number(result.lat);
+				const lon = Number(result.lon);
+
+				if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+					showStatus('Nominatim returned an invalid location.', 'error');
+					setButtonBusy(false);
+					return;
+				}
+
+				if (activeReverseRequest && activeReverseRequest.abort) {
+					activeReverseRequest.abort();
+				}
+
+				clearMarker();
+
+				activeReverseRequest = $.ajax({
+					url: REVERSE_ENDPOINT,
+					method: 'GET',
+					dataType: 'json',
+					data: {
+						format: 'jsonv2',
+						addressdetails: 1,
+						'accept-language': 'en',
+						lat: lat,
+						lon: lon
+					}
+				});
+
+				activeReverseRequest.done(function (reverseData) {
+					const popup = popupMarkup(result, reverseData || result);
+
+					marker = L.marker([lat, lon], { title: result.display_name || fallbackQuery })
+						.addTo(map)
+						.bindPopup(popup, { maxWidth: 420 });
+
+					map.flyTo([lat, lon], Math.max(map.getZoom(), 15), {
+						animate: true,
+						duration: 0.8
+					});
+					marker.openPopup();
+					showStatus('Result placed on the map.', 'success');
+					activeReverseRequest = null;
+					setButtonBusy(false);
+				});
+
+				activeReverseRequest.fail(function (_, statusText) {
+					activeReverseRequest = null;
+
+					if (statusText === 'abort') {
+						setButtonBusy(false);
+						return;
+					}
+
+					const popup = popupMarkup(result, result);
+
+					clearMarker();
+					marker = L.marker([lat, lon], { title: result.display_name || fallbackQuery })
+						.addTo(map)
+						.bindPopup(popup, { maxWidth: 420 });
+
+					map.flyTo([lat, lon], Math.max(map.getZoom(), 15), {
+						animate: true,
+						duration: 0.8
+					});
+					marker.openPopup();
+					showStatus('Result placed on the map.', 'success');
+					activeReverseRequest = null;
+					setButtonBusy(false);
+				});
 			}
 
 			function detailsList(details) {
@@ -366,6 +527,9 @@
 					activeReverseRequest.abort();
 				}
 
+				cancelSuggestionRequests();
+				hideSuggestions();
+
 				clearMarker();
 				setButtonBusy(true);
 				showStatus(`Searching for "${trimmedQuery}"...`, 'warning');
@@ -380,7 +544,7 @@
 						addressdetails: 1,
 						extratags: 1,
 						namedetails: 1,
-						accept-language: 'en',
+						'accept-language': 'en',
 						q: trimmedQuery
 					}
 				});
@@ -396,70 +560,7 @@
 						return;
 					}
 
-					const best = results[0];
-					const lat = Number(best.lat);
-					const lon = Number(best.lon);
-
-					if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-						showStatus('Nominatim returned an invalid location.', 'error');
-						setButtonBusy(false);
-						return;
-					}
-
-					activeReverseRequest = $.ajax({
-						url: REVERSE_ENDPOINT,
-						method: 'GET',
-						dataType: 'json',
-						data: {
-							format: 'jsonv2',
-							addressdetails: 1,
-							accept-language: 'en',
-							lat: lat,
-							lon: lon
-						}
-					});
-
-					activeReverseRequest.done(function (reverseResult) {
-						if (token !== searchToken) {
-							return;
-						}
-
-						const popup = popupMarkup(best, reverseResult || best);
-
-						marker = L.marker([lat, lon], { title: best.display_name || trimmedQuery })
-							.addTo(map)
-							.bindPopup(popup, { maxWidth: 420 });
-
-						map.flyTo([lat, lon], Math.max(map.getZoom(), 15), {
-							animate: true,
-							duration: 0.8
-						});
-						marker.openPopup();
-						showStatus('Result placed on the map.', 'success');
-						activeReverseRequest = null;
-						setButtonBusy(false);
-					});
-
-					activeReverseRequest.fail(function () {
-						if (token !== searchToken) {
-							return;
-						}
-
-						const popup = popupMarkup(best, best);
-
-						marker = L.marker([lat, lon], { title: best.display_name || trimmedQuery })
-							.addTo(map)
-							.bindPopup(popup, { maxWidth: 420 });
-
-						map.flyTo([lat, lon], Math.max(map.getZoom(), 15), {
-							animate: true,
-							duration: 0.8
-						});
-						marker.openPopup();
-						showStatus('Result placed on the map.', 'success');
-						activeReverseRequest = null;
-						setButtonBusy(false);
-					});
+					placeResult(results[0], trimmedQuery);
 				});
 
 				activeSearchRequest.fail(function (_, statusText) {
@@ -480,20 +581,129 @@
 				});
 			}
 
+			function fetchSuggestions(query) {
+				const trimmedQuery = query.trim();
+				const token = ++suggestionToken;
+
+				if (suggestionTimer) {
+					window.clearTimeout(suggestionTimer);
+					suggestionTimer = null;
+				}
+
+				if (activeSuggestionRequest && activeSuggestionRequest.abort) {
+					activeSuggestionRequest.abort();
+				}
+
+				if (trimmedQuery.length < 2) {
+					hideSuggestions();
+					return;
+				}
+
+				suggestionTimer = window.setTimeout(function () {
+					activeSuggestionRequest = $.ajax({
+						url: SEARCH_ENDPOINT,
+						method: 'GET',
+						dataType: 'json',
+						data: {
+							format: 'jsonv2',
+							limit: 6,
+							addressdetails: 1,
+							namedetails: 1,
+							'accept-language': 'en',
+							q: trimmedQuery
+						}
+					});
+
+					activeSuggestionRequest.done(function (results) {
+						if (token !== suggestionToken) {
+							return;
+						}
+
+						openSuggestionList(results, trimmedQuery);
+					});
+
+					activeSuggestionRequest.fail(function (_, statusText) {
+						if (token !== suggestionToken || statusText === 'abort') {
+							return;
+						}
+
+						hideSuggestions();
+					});
+
+					activeSuggestionRequest.always(function () {
+						if (token === suggestionToken) {
+							activeSuggestionRequest = null;
+						}
+					});
+				}, 250);
+			}
+
 			form.on('submit', function (event) {
 				event.preventDefault();
-				performSearch(searchInput.val());
+				const query = searchInput.val();
+				hideSuggestions();
+				performSearch(query);
+			});
+
+			searchInput.on('input', function () {
+				fetchSuggestions(searchInput.val());
 			});
 
 			searchInput.on('keydown', function (event) {
 				if (event.key === 'Escape') {
+					cancelSuggestionRequests();
 					searchInput.val('');
+					hideSuggestions();
 					hideStatus();
+					return;
+				}
+
+				if (!suggestions.is(':visible')) {
+					return;
+				}
+
+				if (event.key === 'ArrowDown') {
+					event.preventDefault();
+					highlightSuggestion(highlightedSuggestionIndex + 1);
+					return;
+				}
+
+				if (event.key === 'ArrowUp') {
+					event.preventDefault();
+					highlightSuggestion(highlightedSuggestionIndex - 1);
+					return;
+				}
+
+				if (event.key === 'Enter' && suggestionItems.length) {
+					event.preventDefault();
+					chooseSuggestion(Math.max(0, highlightedSuggestionIndex));
+				}
+			});
+
+			suggestions.on('mouseenter', '[data-suggestion-index]', function () {
+				highlightSuggestion(Number($(this).attr('data-suggestion-index')));
+			});
+
+			suggestions.on('mousedown', '[data-suggestion-index]', function (event) {
+				event.preventDefault();
+			});
+
+			suggestions.on('click', '[data-suggestion-index]', function () {
+				const index = Number($(this).attr('data-suggestion-index'));
+				chooseSuggestion(index);
+			});
+
+			$(document).on('mousedown', function (event) {
+				if (!$(event.target).closest('.search-shell').length) {
+					cancelSuggestionRequests();
+					hideSuggestions();
 				}
 			});
 
 			map.on('click', function () {
 				hideStatus();
+				cancelSuggestionRequests();
+				hideSuggestions();
 			});
 
 			// Start with a local-friendly center rather than an empty world view.
