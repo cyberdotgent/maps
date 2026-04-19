@@ -489,8 +489,6 @@
 				}
 
 				searchInput.val(location.label || '');
-				setButtonBusy(true);
-				showStatus('Restoring shared location...', 'warning');
 
 				activeReverseRequest = $.ajax({
 					url: REVERSE_ENDPOINT,
@@ -521,14 +519,12 @@
 					map.setView([location.lat, location.lon], Math.max(map.getZoom(), 15));
 					marker.openPopup();
 					activeReverseRequest = null;
-					setButtonBusy(false);
 				});
 
 				activeReverseRequest.fail(function (_, statusText) {
 					activeReverseRequest = null;
 
 					if (statusText === 'abort') {
-						setButtonBusy(false);
 						return;
 					}
 
@@ -546,7 +542,6 @@
 
 					map.setView([location.lat, location.lon], Math.max(map.getZoom(), 15));
 					marker.openPopup();
-					setButtonBusy(false);
 				});
 			}
 
