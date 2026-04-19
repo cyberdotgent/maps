@@ -265,7 +265,6 @@
 			let suggestionTimer = null;
 			let suggestionItems = [];
 			let highlightedSuggestionIndex = -1;
-
 			function escapeHtml(value) {
 				return String(value ?? '').replace(/[&<>"']/g, function (character) {
 					return ({
@@ -289,6 +288,40 @@
 
 			function hideStatus() {
 				statusChip.stop(true, true).fadeOut(120);
+			}
+
+			function updateLocationHash(lat, lon, label) {
+				const hash = new URLSearchParams();
+				hash.set('lat', lat.toFixed(6));
+				hash.set('lon', lon.toFixed(6));
+				if (label) {
+					hash.set('label', label);
+				}
+
+				history.replaceState(null, '', `#${hash.toString()}`);
+			}
+
+			function readLocationHash() {
+				const raw = window.location.hash.replace(/^#/, '');
+
+				if (!raw) {
+					return null;
+				}
+
+				const params = new URLSearchParams(raw);
+				const lat = Number(params.get('lat'));
+				const lon = Number(params.get('lon'));
+				const label = params.get('label') || '';
+
+				if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+					return null;
+				}
+
+				return {
+					lat: lat,
+					lon: lon,
+					label: label
+				};
 			}
 
 			function cancelSuggestionRequests() {
@@ -415,6 +448,7 @@
 						duration: 0.8
 					});
 					marker.openPopup();
+					updateLocationHash(lat, lon, result.display_name || fallbackQuery);
 					showStatus('Result placed on the map.', 'success');
 					activeReverseRequest = null;
 					setButtonBusy(false);
@@ -440,8 +474,78 @@
 						duration: 0.8
 					});
 					marker.openPopup();
+					updateLocationHash(lat, lon, result.display_name || fallbackQuery);
 					showStatus('Result placed on the map.', 'success');
 					activeReverseRequest = null;
+					setButtonBusy(false);
+				});
+			}
+
+			function restoreMarkerFromHash() {
+				const location = readLocationHash();
+
+				if (!location) {
+					return;
+				}
+
+				searchInput.val(location.label || '');
+				setButtonBusy(true);
+				showStatus('Restoring shared location...', 'warning');
+
+				activeReverseRequest = $.ajax({
+					url: REVERSE_ENDPOINT,
+					method: 'GET',
+					dataType: 'json',
+					data: {
+						format: 'jsonv2',
+						addressdetails: 1,
+						'accept-language': 'en',
+						lat: location.lat,
+						lon: location.lon
+					}
+				});
+
+				activeReverseRequest.done(function (reverseData) {
+					const synthetic = {
+						lat: location.lat,
+						lon: location.lon,
+						display_name: location.label || reverseData.display_name || 'Shared location'
+					};
+					const popup = popupMarkup(synthetic, reverseData || synthetic);
+
+					clearMarker();
+					marker = L.marker([location.lat, location.lon], { title: synthetic.display_name })
+						.addTo(map)
+						.bindPopup(popup, { maxWidth: 420 });
+
+					map.setView([location.lat, location.lon], Math.max(map.getZoom(), 15));
+					marker.openPopup();
+					activeReverseRequest = null;
+					setButtonBusy(false);
+				});
+
+				activeReverseRequest.fail(function (_, statusText) {
+					activeReverseRequest = null;
+
+					if (statusText === 'abort') {
+						setButtonBusy(false);
+						return;
+					}
+
+					const synthetic = {
+						lat: location.lat,
+						lon: location.lon,
+						display_name: location.label || 'Shared location'
+					};
+					const popup = popupMarkup(synthetic, synthetic);
+
+					clearMarker();
+					marker = L.marker([location.lat, location.lon], { title: synthetic.display_name })
+						.addTo(map)
+						.bindPopup(popup, { maxWidth: 420 });
+
+					map.setView([location.lat, location.lon], Math.max(map.getZoom(), 15));
+					marker.openPopup();
 					setButtonBusy(false);
 				});
 			}
@@ -707,9 +811,15 @@
 				hideSuggestions();
 			});
 
-			// Start with a local-friendly center rather than an empty world view.
-			showStatus('Search for a place to drop a marker.', 'warning');
-			window.setTimeout(hideStatus, 3500);
+			const initialLocation = readLocationHash();
+
+			if (initialLocation) {
+				restoreMarkerFromHash();
+			} else {
+				// Start with a local-friendly center rather than an empty world view.
+				showStatus('Search for a place to drop a marker.', 'warning');
+				window.setTimeout(hideStatus, 3500);
+			}
 		})();
 	</script>
 </body>
